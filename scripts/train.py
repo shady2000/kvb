@@ -2,21 +2,28 @@ import logging
 import os
 from pathlib import Path
 
+import sys
+sys.path.append('/home/ubuntu/experiments_discrete_key_value_bottleneck')
+sys.path.append('/home/ubuntu/experiments_discrete_key_value_bottleneck/discrete_key_value_bottleneck')
+sys.path.append('/home/ubuntu/experiments_discrete_key_value_bottleneck/kv_bottleneck_experiments')
+
 import torch
 import wandb
 import matplotlib as mpl
 from torch import nn
-import key_value_bottleneck.core as kv_core
+import discrete_key_value_bottleneck.key_value_bottleneck.core as kv_core
 from torch.utils.data import DataLoader
 from matplotlib import pyplot as plt
+import kvb_experiments
+print(kvb_experiments.__file__)
+import kvb_experiments.utils.argparse as argparse_utils
+import kvb_experiments.utils.base as base_utils
+import kvb_experiments.utils.model as model_utils
+import kvb_experiments.utils.eval as eval_utils
+import kvb_experiments.utils.train as train_utils
+import kvb_experiments.utils.data as data_utils
 
-import kv_bottleneck_experiments.utils.argparse as argparse_utils
-import kv_bottleneck_experiments.utils.base as base_utils
-import kv_bottleneck_experiments.utils.model as model_utils
-import kv_bottleneck_experiments.utils.eval as eval_utils
-import kv_bottleneck_experiments.utils.train as train_utils
-import kv_bottleneck_experiments.utils.data as data_utils
-
+debug = 0
 
 PROJECT_NAME = os.environ.get("PROJECT_NAME", "PLACEHOLDER_PROJECT_NAME")
 PROJECT_ENTITY = os.environ.get("PROJECT_ENTITY", "PLACEHOLDER_PROJECT_ENTITY")
@@ -30,20 +37,30 @@ def initialize_model(dataloader_train, args):
     threshold_ema_dead_code = model_utils.get_threshold_ema_dead_code(args)
 
     if "cifar10" in args.backbone or "cifar100" in args.backbone:
+        print("SL")
         bottleneck_encoder_cls = kv_core.SLPretrainedBottleneckedEncoder
-    elif args.backbone == "resnet50_imagenet_v2":
+    elif args.backbone == "resnet50_imagenet_v2": #this one 
+        print("RN50")
         bottleneck_encoder_cls = kv_core.SLPretrainedBottleneckedEncoder
     elif args.backbone == "clip_vit_b32":
+        print("CLIP")
         bottleneck_encoder_cls = kv_core.CLIPBottleneckedEncoder
     elif "vicreg" in args.backbone:
+        print("vicreg")
         bottleneck_encoder_cls = kv_core.VICRegBottleneckedEncoder
     elif "swav" in args.backbone:
+        print("swav")
+
         bottleneck_encoder_cls = kv_core.SwavBottleneckedEncoder
     elif "convmixer" in args.backbone:
+        print("convmixer")
+
         bottleneck_encoder_cls = kv_core.ConvMixerBottleneckedEncoder
     else:
+        print("Dino")
         bottleneck_encoder_cls = kv_core.DinoBottleneckedEncoder
-
+    if debug:
+        print("init bottlenecked encoder")
     bottlenecked_encoder = bottleneck_encoder_cls(
         num_codebooks=args.num_books,
         key_value_pairs_per_codebook=key_value_pairs_per_codebook,
@@ -65,12 +82,17 @@ def initialize_model(dataloader_train, args):
             dataloader_train.dataset, data_utils.EmbeddingDataset
         ),
     )
+    if debug:
+        print("done init bottlenecked encoder")
+
     deviating_transforms = None
     if bottlenecked_encoder.transforms is not None:
         deviating_transforms = bottlenecked_encoder.transforms
         if isinstance(dataloader_train, torch.utils.data.DataLoader):
             dataloader_train.dataset.transform = deviating_transforms
+    if debug:
 
+        print("initializing model")
     logging.info("Initializing model")
     bottlenecked_encoder.to(device)
     bottlenecked_encoder = bottlenecked_encoder.prepare(
@@ -79,7 +101,9 @@ def initialize_model(dataloader_train, args):
 
     bottlenecked_encoder.reset_cluster_size_counter()
 
-    bottlenecked_encoder.disable_update_keys()
+    bottlenecked_encoder.disable_update_keys() #edited
+    if debug:
+        print('getting decoder module')
     decoder = model_utils.get_decoder_module(
         num_codebooks=bottlenecked_encoder.num_codebooks,
         dim_values=bottlenecked_encoder.dim_values,
@@ -87,28 +111,44 @@ def initialize_model(dataloader_train, args):
         num_channels=bottlenecked_encoder.num_channels,
         args=args,
     )
+    if debug:
+        print('got decoder module')
+
     model = model_utils.ModelWrapper(bottlenecked_encoder, decoder, args)
     model.to(device)
+    if debug:
+        print('model.train()')
+
     model.train()
 
     return model, deviating_transforms
 
 
 def train(args):
+    if debug:
+        print("train!!!")
     base_utils.seed_everything(args.seed)
     logging.info("Training run configs: " + str(args))
     dataloader_train, dataloader_test = data_utils.get_dataloaders(
         dataset=args.dataset_name, args=args
     )
-
+    if debug:
+        print("init model")
     if args.pretrain_data == args.dataset_name:
+        if debug:
+            print("first case init")
         model, deviating_transforms = initialize_model(dataloader_train, args)
     else:
+        if debug:
+            print("second case init")
         dataloader_pretrain, _ = data_utils.get_dataloaders(
             dataset=args.pretrain_data, args=args
         )
+        if debug:
+            print("run init model")
         model, deviating_transforms = initialize_model(dataloader_pretrain, args)
-
+    if debug:
+        print("done init model")
     if deviating_transforms is not None:
         dataloader_train.dataset.transform = deviating_transforms
         dataloader_test.dataset.transform = deviating_transforms
@@ -121,6 +161,8 @@ def train(args):
         values = torch.zeros_like(model.bottlenecked_encoder.bottleneck.values)
     else:
         raise ValueError("Unknown values_init: " + args.values_init)
+    if debug:
+        print("init bottleneck values")
     model.bottlenecked_encoder.bottleneck.values = nn.Parameter(values)
     model.bottlenecked_encoder.bottleneck.values.requires_grad = True
     num_classes = base_utils.get_class_nums(args)
@@ -151,18 +193,28 @@ def train(args):
 
     optimizer = train_utils.get_optimizer(model, args)
     criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing).to(device)
-
+    if debug:
+        print("freeze keys")
     model.bottlenecked_encoder.freeze_keys()
+    if debug:
+        print("freeze for adaptation")
+
     model.freeze_for_adaptation()
+    if debug:
+        print("done freezing for adaptation")
+
     logging.info("model is on device: " + str(next(model.parameters()).device))
     logging.info("device variable: " + str(device))
     log_step_size = args.log_step_size
     loss_total = 0.0
     train_epochs = 0
     epoch = 0
-    eval_train_test_accuracy(
-        args, criterion, dataloader_test, dataloader_train, model, train_epochs, epoch
-    )
+    if debug:
+        print("not eval train test")
+    if not debug:
+        eval_train_test_accuracy(
+            args, criterion, dataloader_test, dataloader_train, model, train_epochs, epoch
+        )
     model.train()
     model.bottlenecked_encoder.activate_counts()
     if args.save_checkpoints:
@@ -171,7 +223,7 @@ def train(args):
         model_dir.mkdir(parents=True, exist_ok=True)
         torch.save(
             model,
-            os.path.join(model_dir, f"{wandb.run.name}_epoch_{str(train_epochs)}.pt"),
+            #os.path.join(model_dir, f"{wandb.run.name}_epoch_{str(train_epochs)}.pt"),
         )
     for class_list in class_splits:
         dataloader = data_utils.get_split_dataloaders(
@@ -182,51 +234,58 @@ def train(args):
         for epoch in range(0, args.cl_epochs):
             train_epochs += epoch_factor
             if epoch % log_step_size == 1:
-                wandb.log({"local_loss": loss_total})
-                wandb.log(
+                #wandb.log({"local_loss": loss_total})
+                """ wandb.log(
                     {
                         "norm_values": torch.norm(
                             model.bottlenecked_encoder.bottleneck.values, dim=-1
                         ).mean()
                     }
-                )
-                eval_train_test_accuracy(
-                    args, criterion, dataloader_test, dataloader_train, model, train_epochs, epoch
-                )
+                ) """
+                if not debug:
+                    eval_train_test_accuracy(
+                        args, criterion, dataloader_test, dataloader_train, model, train_epochs, epoch
+                    )
                 model.train()
                 model.bottlenecked_encoder.activate_counts()
                 logging.info("cl epoch: " + str(epoch))
             loss_total = 0.0
+            if debug:
+                iter = 0
             for inputs, labels in dataloader:
+                if debug:
+                    iter +=1
+                    if iter == 2:
+                        break
                 inputs = inputs.to(device)
                 labels = labels.to(device)
                 optimizer.zero_grad()
-
-                outputs = model(inputs)
+                outputs = model(inputs, labels) #edited
                 loss = criterion(outputs, labels)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.gradient_clip)
                 optimizer.step()
                 loss_total += float(loss.item())
         # eval at very end
-        wandb.log({"local_loss": loss_total})
+        """ wandb.log({"local_loss": loss_total})
         wandb.log(
             {
                 "norm_values": torch.norm(
                     model.bottlenecked_encoder.bottleneck.values, dim=-1
                 ).mean()
             }
-        )
-        eval_train_test_accuracy(
-            args, criterion, dataloader_test, dataloader_train, model, train_epochs, epoch
-        )
+        ) """
+        if not debug:
+            eval_train_test_accuracy(
+                args, criterion, dataloader_test, dataloader_train, model, train_epochs, epoch
+            )
         plot_dict = {}
         for num_book in range(
             min(1, model.bottlenecked_encoder.bottleneck.num_codebooks)
         ):
-            plot_dict[f"kv_pair_counts_book_{num_book}"] = wandb.Histogram(
+            """ plot_dict[f"kv_pair_counts_book_{num_book}"] = wandb.Histogram(
                 model.bottlenecked_encoder.bottleneck.cluster_size_counter.detach().cpu()
-            )
+            ) """
             if args.plot_pair_utilization:
                 values_im = plt.imshow(
                     model.bottlenecked_encoder.bottleneck.values[num_book, :100]
@@ -237,7 +296,7 @@ def train(args):
                     vmax=1,
                     vmin=-1,
                 )
-                plot_dict[f"values_book_{num_book}"] = wandb.Image(values_im)
+                #plot_dict[f"values_book_{num_book}"] = wandb.Image(values_im)
         if args.plot_pair_utilization:
             counter_im = plt.imshow(
                 model.bottlenecked_encoder.bottleneck.cluster_size_counter[:, :100]
@@ -246,7 +305,7 @@ def train(args):
                 aspect="auto",
                 cmap=mpl.colormaps["hot"],
             )
-            plot_dict["pair_counts"] = wandb.Image(counter_im)
+            #plot_dict["pair_counts"] = wandb.Image(counter_im)
             classes_image = plt.imshow(
                 model.bottlenecked_encoder.bottleneck.values.argmax(dim=-1)[:, :100]
                 .detach()
@@ -254,27 +313,28 @@ def train(args):
                 aspect="auto",
                 cmap=mpl.colormaps["tab10"],
             )
-            wandb.log({f"class_preds": [wandb.Image(classes_image)]})
+            #wandb.log({f"class_preds": [wandb.Image(classes_image)]})
             plot_dict["class_preds"] = wandb.Image(classes_image)
         plot_dict["fraction_unused_keys"] = float(
             model.bottlenecked_encoder.fraction_of_unused_keys()
         )
-        wandb.log(plot_dict)
+        #wandb.log(plot_dict)
         if args.save_checkpoints:
             model_dir = os.path.join(args.root_dir, "checkpoints", args.sweep_name)
             model_dir = Path(model_dir)
             model_dir.mkdir(parents=True, exist_ok=True)
             torch.save(
                 model,
-                os.path.join(
+                """ os.path.join(
                     model_dir, f"{wandb.run.name}_epoch_{str(train_epochs)}.pt"
-                ),
+                ), """
             )
 
 
 def eval_train_test_accuracy(
     args, criterion, dataloader_test, dataloader_train, model, train_epochs, epoch
-):
+):  
+    print("eval train test")
     model.eval()
     model.bottlenecked_encoder.deactivate_counts()
     _ = eval_utils.evaluate_accuracy(
@@ -287,6 +347,7 @@ def eval_train_test_accuracy(
         wandb_log=True,
         criterion=criterion,
     )
+    print("half eval train test")
     _ = eval_utils.evaluate_accuracy(
         model=model,
         dataloader=dataloader_train,
@@ -297,14 +358,15 @@ def eval_train_test_accuracy(
         wandb_log=True,
         criterion=criterion,
     )
+    print("done eval train test")
 
 
 if __name__ == "__main__":
     run_args = argparse_utils.ArgumentParserWrapper().parse()
-    wandb.init(
+    """ wandb.init(
         project=PROJECT_NAME,
         entity=PROJECT_ENTITY,
         dir=f"{run_args.root_dir}/wandb",
         settings=wandb.Settings(_disable_stats=True),
-    )
+    ) """
     train(run_args)
