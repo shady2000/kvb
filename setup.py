@@ -20,6 +20,6 @@ setup(
         'matplotlib',
         'numpy',
         'einops',
-        #'key_value_bottleneck @ git+https://github.com/ftraeuble/discrete_key_value_bottleneck.git#egg=key_value_bottleneck',
+        'key_value_bottleneck @ git+https://github.com/ftraeuble/discrete_key_value_bottleneck.git#egg=key_value_bottleneck',
     ]
 )
