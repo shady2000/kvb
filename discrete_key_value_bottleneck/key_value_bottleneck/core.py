@@ -739,16 +739,24 @@ class BottleneckedEncoder(nn.Module):
             loader: Iterable,
             epochs: int = 1,
             inputs_extractor: Optional[Callable] = None,
+            labels_extractor: Optional[Callable] = None,
+
     ):
         device = next(self.parameters()).device
         if inputs_extractor is None:
             inputs_extractor = lambda item: item[0]
+        if labels_extractor is None:     
+            labels_extractor = lambda item: item[1]
         for epoch in range(epochs):
             for sample in tqdm.tqdm(loader):
                 inputs = inputs_extractor(sample)
-                if isinstance(inputs, torch.Tensor):
+                labels = labels_extractor(sample)
+
+                if isinstance(inputs, torch.Tensor) and isinstance(labels, torch.Tensor):
                     inputs = inputs.to(device)
-                self.forward(inputs)
+                    labels = labels.to(device)
+
+                self.forward(inputs, labels)
         return self
 
     def prepare(self, loader: Iterable, epochs: int = 1):
